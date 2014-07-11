@@ -24,17 +24,21 @@
   static dispatch_once_t onceToken;
 
   dispatch_once(&onceToken, ^{
-      sharedFormatter = [[self alloc] initWithStyle:nil executablePath:nil];
+      sharedFormatter = [[self alloc] initWithStyle:nil
+                                     executablePath:nil
+                               useSystemClangFormat:NO];
   });
 
   return sharedFormatter;
 }
 
 - (instancetype)initWithStyle:(NSString *)style
-               executablePath:(NSString *)executablePath {
+               executablePath:(NSString *)executablePath
+         useSystemClangFormat:(BOOL)useSystemClangFormat {
   if (self = [self init]) {
     self.style = style;
     self.executablePath = executablePath;
+    self.useSystemClangFormat = useSystemClangFormat;
   }
   return self;
 }
@@ -126,13 +130,10 @@
                          withDocument:document
                                 block:^(NSArray *fragments, NSArray *errors) {
                                     if (errors.count == 0) {
-                                      NSLog(@"FUCK no errors!");
-
                                       NSArray *selectionRanges = [self
                                           selectionRangesAfterReplacingFragments:
-                                              fragments
-                                                                usingTextStorage:
-                                                                    textStorage
+                                              fragments usingTextStorage:
+                                                            textStorage
                                                                     withDocument:
                                                                         document];
 
@@ -140,8 +141,6 @@
                                         [[TRVSXcode textView]
                                             setSelectedRanges:selectionRanges];
                                     } else {
-                                      NSLog(@"FUCK has errors: %@", errors);
-
                                       NSAlert *alert = [NSAlert new];
                                       alert.messageText =
                                           [(NSError *)errors.firstObject
@@ -202,6 +201,34 @@
   NSMutableArray *fragments = [[NSMutableArray alloc] init];
   NSMutableArray *errors = [[NSMutableArray alloc] init];
 
+  NSString *executablePath = self.executablePath;
+  if (self.useSystemClangFormat) {
+    NSDictionary *environmentDict = [[NSProcessInfo processInfo] environment];
+    NSString *shellString =
+        [environmentDict objectForKey:@"SHELL"] ?: @"/bin/bash";
+
+    NSPipe *outputPipe = [NSPipe pipe];
+    NSPipe *errorPipe = [NSPipe pipe];
+
+    NSTask *task = [[NSTask alloc] init];
+    task.standardOutput = outputPipe;
+    task.standardError = errorPipe;
+    task.launchPath = shellString;
+    task.arguments = @[ @"-l", @"-c", @"which clang-format" ];
+
+    [task launch];
+    [task waitUntilExit];
+    [errorPipe.fileHandleForReading readDataToEndOfFile];
+    NSData *outputData = [outputPipe.fileHandleForReading readDataToEndOfFile];
+    NSString *outputPath = [[NSString alloc] initWithData:outputData
+                                                 encoding:NSUTF8StringEncoding];
+    outputPath = [outputPath
+        stringByTrimmingCharactersInSet:[NSCharacterSet newlineCharacterSet]];
+    if ([outputPath length]) {
+      executablePath = outputPath;
+    }
+  }
+
   [continuousLineRanges enumerateObjectsUsingBlock:^(NSValue *rangeValue,
                                                      NSUInteger idx,
                                                      BOOL *stop) {
@@ -226,7 +253,7 @@
 
       __weak typeof(fragment) weakFragment = fragment;
       [fragment formatWithStyle:self.style
-          usingClangFormatAtLaunchPath:self.executablePath
+          usingClangFormatAtLaunchPath:executablePath
                                  block:^(NSString *formattedString,
                                          NSError *error) {
                                      __strong typeof(weakFragment)
